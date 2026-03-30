@@ -1,5 +1,6 @@
 --[[
-    FieScript v5.5 - Blutiger (English)
+    FieScript v5.5.5 - Blutiger (English)
+    Separate logic for Inventory-only items (Bandage/Medkit) vs Consumable items
 ]]
 
 -- Services
@@ -161,7 +162,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -50, 1, 0)
 Title.Position = UDim2.new(0, 15, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "FieScript v5.5"
+Title.Text = "FieScript v5.5.5"
 Title.TextColor3 = themeColor
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Font = Enum.Font.GothamBold
@@ -314,63 +315,22 @@ local mobOptions = {ESP = false, Chams = false, Name = false, Distance = false}
 local itemOptions = {ESP = false, Chams = false, Name = false, Distance = false}
 local mobNames = {"Runner", "Crawler", "Riot", "Zombie"}
 local itemNames = {
-    "Bandage", "Barbed Wire", "Battery", "Battery Pack", "Beans", "Bloxiade", "Bloxy Cola",
-    "Compound I", "Crowbar", "Dumbell", "Refined Fuel", "Fuel", "Grenade", "Knife",
-    "Long Ammo", "Chips", "Medium Ammo", "Pistol Ammo", "Revolver", "Scrap",
-    "Screws", "Shells", "Spatula", "Tray", "AC", "Satellite Dish", "Refined Metal",
+    "Bandage", "Shells", "Barbed Wire", "Grenade", "Knife", "Long Ammo", "Chips", "Medium Ammo", "Pistol Ammo", "Revolver", "Battery", "Battery Pack", "Beans", "Bloxiade", "Bloxy Cola",
+    "Compound I", "Crowbar", "Dumbell", "Refined Fuel", "Fuel", "Scrap",
+    "Screws", "Spatula", "Tray", "AC", "Satellite Dish", "Refined Metal",
     "Watch", "MRE", "TV", "Bucket"
 }
 
--- Items stored in the game's CUSTOM inventory (not Roblox Backpack).
--- For these: only auto-collect if NOT already owned; never equip or fire a use remote.
-local inventoryOnlyItems = {"Bandage", "Medkit"}
+-- Items that go to custom INVENTORY only (never equip, just pickup)
+local inventoryOnlyItems = {"Bandage", "Medkit", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet"}
 
 local autoUseItemNames = {
     "Bandage", "Medkit", "Beans", "Bloxiade", "Bloxy Cola",
-    "Long Ammo", "Medium Ammo", "Pistol Ammo", "Shells"
+    "Long Ammo", "Medium Ammo", "Pistol Ammo", "Shells", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet"
 }
 
 local charactersFolder = Workspace:FindFirstChild("Characters")
 local droppedItemsFolder = Workspace:FindFirstChild("DroppedItems")
-
--- ========== Custom Inventory Check ==========
---[[
-    ROOT CAUSE OF THE BUG:
-    The game uses a custom inventory system (the slots panel shown in the screenshot:
-    Backpack / Bat / Turret / Bandage). Items like Bandage and Medkit are stored
-    somewhere under LocalPlayer as data/instances — NOT inside the Roblox
-    LocalPlayer.Backpack service container.
-
-    The old code checked:  backpack:FindFirstChild(name)
-    That is the Roblox Backpack, which never contains these items, so the check
-    always returned nil → the script treated the player as "not owning" the item
-    every single tick → it spammed the pickup remote endlessly even with Bandage
-    already in slot 4.
-
-    THE FIX:
-    isItemInCustomInventory() searches everywhere under LocalPlayer — including
-    all common custom folder names — using FindFirstChild(name, true) (recursive).
-    If the item exists anywhere as an Instance (e.g. a Tool, StringValue, or
-    ObjectValue named "Bandage") the function returns true and the pickup is skipped.
-
-    If the game stores inventory as pure data (IntValues, tables, etc.) with a
-    different naming convention, this recursive search still covers the most common
-    patterns. The `break` after one successful pickup also prevents multiple
-    simultaneous pickup fires per tick.
-]]
-local function isItemInCustomInventory(itemName)
-    -- Check character (equipped tool)
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChild(itemName) then return true end
-
-    -- Recursive search through all of LocalPlayer's descendants.
-    -- This covers Inventory/, Items/, Data/, PlayerData/, or any other
-    -- custom folder the game uses to store the player's owned items.
-    local found = LocalPlayer:FindFirstChild(itemName, true)
-    if found then return true end
-
-    return false
-end
 
 -- ========== ESP Helpers ==========
 local function getItemMainPart(item)
@@ -816,28 +776,11 @@ for i, name in ipairs(autoUseItemNames) do
 end
 
 --[[
-    AUTO USE LOGIC v5.5 — Bug fix for Bandage / Medkit spam pickup
-
-    ROOT CAUSE:
-      Old code:  backpack:FindFirstChild(name)
-      This is the Roblox Backpack container. The game's custom inventory
-      (seen as numbered slots in the HUD) stores items like Bandage/Medkit
-      elsewhere under LocalPlayer — NOT in Roblox's Backpack.
-      So the "already owned" check always returned nil → spam pickup every tick.
-
-    FIX:
-      isItemInCustomInventory() does a recursive search (FindFirstChild(name, true))
-      across ALL of LocalPlayer's descendants, which covers any custom inventory
-      folder the game uses regardless of its name. If the item exists anywhere
-      as a named Instance, the pickup is skipped for that tick.
-
-    Bandage / Medkit behaviour:
-      - Already in custom inventory → skip entirely (no pickup, no use)
-      - Not owned + dropped item within radius → fire pickup remote once, then break
-      - Never equip, never fire a use remote (game handles consumption itself)
-
-    All other items:
-      - Standard equip-from-backpack → fire use remote logic (unchanged)
+    AUTO USE LOGIC v5.5.5
+    
+    Separate logic for different item types:
+    - Inventory-only (Bandage/Medkit): Fire pickup remote only, no equip
+    - Consumable items (Ammo, Beans): Equip + use (from backpack or dropped)
 ]]
 local autoUseConn = nil
 local function startAutoUse()
@@ -855,40 +798,30 @@ local function startAutoUse()
             local shouldUse = auAllActive and not isChecked or (not auAllActive and isChecked)
             if not shouldUse then continue end
 
-            -- ── Bandage / Medkit: custom inventory items (BUG FIX) ──
+            -- Inventory-only items: Just pickup (no equip)
             if table.find(inventoryOnlyItems, name) then
-
-                -- Check the REAL custom inventory (recursive search under LocalPlayer).
-                -- This correctly detects items stored in custom game inventory folders,
-                -- unlike the old check which only looked in Roblox's Backpack service.
-                if isItemInCustomInventory(name) then
-                    continue  -- Already owned → do absolutely nothing this tick
-                end
-
-                -- Not owned yet → collect one nearby dropped item and stop
                 if droppedItemsFolder and root then
                     for _, item in ipairs(droppedItemsFolder:GetChildren()) do
                         if item.Name == name then
                             local mp = item.PrimaryPart or getItemMainPart(item)
                             if mp and (mp.Position - root.Position).Magnitude <= radius then
-                                if adjustBackpackRemote then
-                                    adjustBackpackRemote:FireServer(item)
-                                elseif pickUpItemRemote then
+                                if pickUpItemRemote then
                                     pickUpItemRemote:FireServer(item)
                                 end
                                 task.wait(0.1)
-                                break  -- One pickup per item per tick — prevents burst firing
+                                break
                             end
                         end
                     end
                 end
 
             else
-                -- ── Standard consumable: equip from Roblox Backpack then use ──
+                -- Consumable items: Equip from backpack/character then use
                 local tool = backpack:FindFirstChild(name) or char:FindFirstChild(name)
                 if tool then
                     local hum = char:FindFirstChildOfClass("Humanoid")
                     if hum then hum:EquipTool(tool) task.wait(0.05) end
+                    
                     local ar = tool:FindFirstChild("Activate") or tool:FindFirstChild("Use")
                     if ar and ar:IsA("RemoteEvent") then
                         ar:FireServer()
@@ -1116,15 +1049,15 @@ local function mkInfo(text, color, size, y)
     l.TextXAlignment = Enum.TextXAlignment.Left l.Parent = info
 end
 mkInfo("FieScript", Color3.fromRGB(100,160,255), 22, yOff) yOff = yOff + 30
-mkInfo("Version: 5.5", Color3.fromRGB(255,255,255), 16, yOff) yOff = yOff + 30
+mkInfo("Version: 5.5.3", Color3.fromRGB(255,255,255), 16, yOff) yOff = yOff + 30
 mkInfo("Keybinds:", Color3.fromRGB(200,200,255), 14, yOff) yOff = yOff + 22
 mkInfo("  [Insert]  Toggle GUI",                Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
 mkInfo("  [Q]       Speed  (rebindable)",        Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
 mkInfo("  [X]       Auto Pickup  (rebindable)",  Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
 mkInfo("  [C]       Auto Use  (rebindable)",     Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 35
-mkInfo("Auto Use notes:", Color3.fromRGB(200,200,255), 13, yOff) yOff = yOff + 20
-mkInfo("  Bandage & Medkit = collect only if NOT in custom inventory", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 20
-mkInfo("  Other items = equip from backpack + use", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 35
+mkInfo("Auto Use Logic:", Color3.fromRGB(200,200,255), 13, yOff) yOff = yOff + 20
+mkInfo("  Bandage/Medkit = pickup only (no equip)", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 20
+mkInfo("  Other items = equip + use", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 35
 
 local unloadBtn = Instance.new("TextButton")
 unloadBtn.Size = UDim2.new(0, 200, 0, 40) unloadBtn.Position = UDim2.new(0, 5, 0, yOff)
@@ -1199,4 +1132,4 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
     )
 end))
 
-print("FieScript v5.5 loaded. [Insert] GUI | [Q] Speed | [X] Pickup | [C] AutoUse")
+print("FieScript v5.5.5 loaded. [Insert] GUI | [Q] Speed | [X] Pickup | [C] AutoUse")
