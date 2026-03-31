@@ -1,6 +1,7 @@
 --[[
     FieScript v5.5.5 - Blutiger (English)
     Separate logic for Inventory-only items (Bandage/Medkit) vs Consumable items
+    + ESP keybind toggles
 ]]
 
 -- Services
@@ -61,8 +62,8 @@ HudScreenGui.DisplayOrder = 10
 -- ========== HUD ==========
 local HudFrame = Instance.new("Frame")
 HudFrame.Name = "HUD"
-HudFrame.Size = UDim2.new(0, 180, 0, 80)
-HudFrame.Position = UDim2.new(0, 10, 1, -100)
+HudFrame.Size = UDim2.new(0, 180, 0, 100)
+HudFrame.Position = UDim2.new(0, 10, 1, -115)
 HudFrame.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
 HudFrame.BorderSizePixel = 2
 HudFrame.BorderColor3 = themeColor
@@ -110,9 +111,15 @@ local function createHudRow(text, yPos)
     return dot, label
 end
 
-local hudSpeedDot,  hudSpeedLabel  = createHudRow("Speed: Off",       22)
-local hudPickupDot, hudPickupLabel = createHudRow("Auto Pickup: Off", 40)
-local hudUseDot,    hudUseLabel    = createHudRow("Auto Use: Off",    58)
+local hudSpeedDot,   hudSpeedLabel   = createHudRow("Speed: Off",       22)
+local hudPickupDot,  hudPickupLabel  = createHudRow("Auto Pickup: Off", 40)
+local hudUseDot,     hudUseLabel     = createHudRow("Auto Use: Off",    58)
+local hudMobESPDot,  hudMobESPLabel  = createHudRow("Mob ESP: Off",     76)
+local hudItemESPDot, hudItemESPLabel = createHudRow("Item ESP: Off",    94)
+
+-- Resize HUD to fit 5 rows
+HudFrame.Size = UDim2.new(0, 180, 0, 115)
+HudFrame.Position = UDim2.new(0, 10, 1, -125)
 
 local function updateHud(dot, label, text, active)
     label.Text = text .. ": " .. (active and "On" or "Off")
@@ -315,22 +322,24 @@ local mobOptions = {ESP = false, Chams = false, Name = false, Distance = false}
 local itemOptions = {ESP = false, Chams = false, Name = false, Distance = false}
 local mobNames = {"Runner", "Crawler", "Riot", "Zombie"}
 local itemNames = {
-    "Bandage", "Shells", "Barbed Wire", "Grenade", "Knife", "Long Ammo", "Chips", "Medium Ammo", "Pistol Ammo", "Revolver", "Battery", "Battery Pack", "Beans", "Bloxiade", "Bloxy Cola",
-    "Compound I", "Crowbar", "Dumbell", "Refined Fuel", "Fuel", "Scrap",
+    "Bandage", "Shells", "Barbed Wire", "Grenade", "Knife", "Beans", "Bloxiade", "Bloxy Cola", "Chips", "Long Ammo", "Medium Ammo", "Pistol Ammo", "Revolver", "Katana", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet", "Riot Shield", "Fire Axe",
+    "Compound I", "Crowbar", "Dumbell", "Refined Fuel", "Fuel", "Scrap", "Battery", "Battery Pack",
     "Screws", "Spatula", "Tray", "AC", "Satellite Dish", "Refined Metal",
     "Watch", "MRE", "TV", "Bucket"
 }
 
--- Items that go to custom INVENTORY only (never equip, just pickup)
-local inventoryOnlyItems = {"Bandage", "Medkit", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet"}
+local inventoryOnlyItems = {"Bandage", "Medkit", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet", "Riot Shield", "Fire Axe"}
 
 local autoUseItemNames = {
     "Bandage", "Medkit", "Beans", "Bloxiade", "Bloxy Cola",
-    "Long Ammo", "Medium Ammo", "Pistol Ammo", "Shells", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet"
+    "Long Ammo", "Medium Ammo", "Pistol Ammo", "Shells", "Grenade", "Knife", "Compound I", "Crowbar", "Katana", "Revolver", "Molotov", "Compound S", "Uzi", "Rifle", "Hatchet", "Riot Shield", "Fire Axe"
 }
 
 local charactersFolder = Workspace:FindFirstChild("Characters")
 local droppedItemsFolder = Workspace:FindFirstChild("DroppedItems")
+
+-- Pre-declared here; populated after Visuals tab builds the filter UI
+local itemESPFilter = {}
 
 -- ========== ESP Helpers ==========
 local function getItemMainPart(item)
@@ -437,7 +446,11 @@ local function refreshItemESP()
     for i in pairs(itemESPInstances) do removeItemESP(i) end
     if not itemOptions.ESP or not droppedItemsFolder then return end
     for _, c in ipairs(droppedItemsFolder:GetChildren()) do
-        if table.find(itemNames, c.Name) then createItemESP(c) end
+        -- Only show ESP for items that are checked in the filter
+        -- itemESPFilter is built after this function is defined, so we check defensively
+        local filterFn = itemESPFilter and itemESPFilter[c.Name]
+        local allowed = filterFn == nil or filterFn()
+        if table.find(itemNames, c.Name) and allowed then createItemESP(c) end
     end
 end
 
@@ -449,7 +462,11 @@ if charactersFolder then
 end
 if droppedItemsFolder then
     table.insert(connections, droppedItemsFolder.ChildAdded:Connect(function(c)
-        if itemOptions.ESP and table.find(itemNames, c.Name) then createItemESP(c) end
+        if itemOptions.ESP and table.find(itemNames, c.Name) then
+            local filterFn = itemESPFilter and itemESPFilter[c.Name]
+            local allowed = filterFn == nil or filterFn()
+            if allowed then createItemESP(c) end
+        end
     end))
     table.insert(connections, droppedItemsFolder.ChildRemoved:Connect(removeItemESP))
 end
@@ -541,21 +558,152 @@ end
 local visuals = tabFrames["Visuals"]
 local yOff = 5
 
-local mgH = 45 + 4 * 37
+-- ---- Mob ESP group (toggle + keybind + sub-options) ----
+-- Height: 45 header + 32 toggle + 30 keybind + 4*37 sub-options = 255
+local mgH = 45 + 32 + 34 + 4 * 37
 local mg, mc = makeGroup(visuals, "Mob ESP", yOff, mgH) yOff = yOff + mgH + 10
-makeToggleBtn(mc, "Mob ESP", false, function(s) mobOptions.ESP = s refreshMobESP() StatusText.Text = s and "Mob ESP enabled" or "Mob ESP disabled" end, 0, 140)
-local sy = 40
-makeToggleBtn(mc, "Chams", false, function(s) mobOptions.Chams = s refreshMobESP() end, sy, 100) sy = sy + 37
-makeToggleBtn(mc, "Name",  false, function(s) mobOptions.Name  = s refreshMobESP() end, sy, 100) sy = sy + 37
+
+-- Mob ESP keybind state (declared before toggle so the toggle cb can reference it)
+local mobESPKeyBind = Enum.KeyCode.Z
+local listeningForMobESPKey = false
+local mobESPKeyBtn -- forward declared, created below
+
+local _mobESPBtn, _mobESPState, toggleMobESPExt = makeToggleBtn(mc, "Mob ESP", false, function(s)
+    mobOptions.ESP = s
+    refreshMobESP()
+    updateHud(hudMobESPDot, hudMobESPLabel, "Mob ESP", s)
+    StatusText.Text = s and "Mob ESP enabled" or "Mob ESP disabled"
+end, 0, 140)
+
+-- Mob ESP keybind button
+mobESPKeyBtn = makeKeybindBtn(mc, "Mob ESP Key:", mobESPKeyBind, 37)
+listeningForMobESPKey = false
+mobESPKeyBtn.MouseButton1Click:Connect(function()
+    listeningForMobESPKey = true
+    mobESPKeyBtn.Text = "Press any key..."
+    mobESPKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 100)
+end)
+
+-- Sub-option buttons (Chams, Name, Distance) start at y=72 inside container
+local sy = 72
+makeToggleBtn(mc, "Chams",    false, function(s) mobOptions.Chams    = s refreshMobESP() end, sy, 100) sy = sy + 37
+makeToggleBtn(mc, "Name",     false, function(s) mobOptions.Name     = s refreshMobESP() end, sy, 100) sy = sy + 37
 makeToggleBtn(mc, "Distance", false, function(s) mobOptions.Distance = s refreshMobESP() end, sy, 100)
 
-local igH = 45 + 4 * 37
+-- ---- Item ESP group (toggle + keybind + sub-options + item filter list) ----
+-- Height: 45 header + 32 toggle + 34 keybind + 3*37 sub-opts + 20 filter label + 160 scrolllist
+local igH = 45 + 32 + 34 + 3 * 37 + 20 + 160
 local ig, ic = makeGroup(visuals, "Item ESP", yOff, igH) yOff = yOff + igH + 10
-makeToggleBtn(ic, "Item ESP", false, function(s) itemOptions.ESP = s refreshItemESP() StatusText.Text = s and "Item ESP enabled" or "Item ESP disabled" end, 0, 140)
-sy = 40
+
+local itemESPKeyBind = Enum.KeyCode.V
+local listeningForItemESPKey = false
+local itemESPKeyBtn
+
+-- item ESP filter: which items are whitelisted for ESP
+-- key = item name, value = getter function returning bool
+
+local _itemESPBtn, _itemESPState, toggleItemESPExt = makeToggleBtn(ic, "Item ESP", false, function(s)
+    itemOptions.ESP = s
+    refreshItemESP()
+    updateHud(hudItemESPDot, hudItemESPLabel, "Item ESP", s)
+    StatusText.Text = s and "Item ESP enabled" or "Item ESP disabled"
+end, 0, 140)
+
+itemESPKeyBtn = makeKeybindBtn(ic, "Item ESP Key:", itemESPKeyBind, 37)
+listeningForItemESPKey = false
+itemESPKeyBtn.MouseButton1Click:Connect(function()
+    listeningForItemESPKey = true
+    itemESPKeyBtn.Text = "Press any key..."
+    itemESPKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 100)
+end)
+
+sy = 72
 makeToggleBtn(ic, "Chams",    false, function(s) itemOptions.Chams    = s refreshItemESP() end, sy, 100) sy = sy + 37
 makeToggleBtn(ic, "Name",     false, function(s) itemOptions.Name     = s refreshItemESP() end, sy, 100) sy = sy + 37
-makeToggleBtn(ic, "Distance", false, function(s) itemOptions.Distance = s refreshItemESP() end, sy, 100)
+makeToggleBtn(ic, "Distance", false, function(s) itemOptions.Distance = s refreshItemESP() end, sy, 100) sy = sy + 37
+
+-- "All Items Allowed" toggle for Item ESP filter
+local espAllActive = false
+local espAllBtn = Instance.new("TextButton")
+espAllBtn.Size = UDim2.new(0, 200, 0, 26) espAllBtn.Position = UDim2.new(0, 5, 0, sy + 5)
+espAllBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20) espAllBtn.BorderSizePixel = 1 espAllBtn.BorderColor3 = themeColor
+espAllBtn.Text = "All Items Allowed: Off" espAllBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+espAllBtn.Font = Enum.Font.GothamMedium espAllBtn.TextSize = 13 espAllBtn.Parent = ic
+onThemeChange(function(c) espAllBtn.BorderColor3 = c end)
+espAllBtn.MouseButton1Click:Connect(function()
+    espAllActive = not espAllActive
+    espAllBtn.BackgroundColor3 = espAllActive and Color3.fromRGB(0, 50, 150) or Color3.fromRGB(20, 20, 20)
+    espAllBtn.Text = "All Items Allowed: " .. (espAllActive and "On (checked = blacklist)" or "Off")
+    if itemOptions.ESP then refreshItemESP() end
+end)
+sy = sy + 32
+
+-- Filter label
+local filterLbl = Instance.new("TextLabel")
+filterLbl.Size = UDim2.new(1, -10, 0, 18)
+filterLbl.Position = UDim2.new(0, 5, 0, sy)
+filterLbl.BackgroundTransparency = 1
+filterLbl.Text = "ESP Filter (checked = show ESP):"
+filterLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
+filterLbl.Font = Enum.Font.Gotham
+filterLbl.TextSize = 12
+filterLbl.TextXAlignment = Enum.TextXAlignment.Left
+filterLbl.Parent = ic
+sy = sy + 20
+
+-- Scrollable item filter list
+local espFilterList = Instance.new("ScrollingFrame")
+espFilterList.Size = UDim2.new(1, -10, 0, 160)
+espFilterList.Position = UDim2.new(0, 5, 0, sy)
+espFilterList.BackgroundColor3 = Color3.fromRGB(5, 5, 5)
+espFilterList.BorderSizePixel = 1
+espFilterList.BorderColor3 = themeColor
+espFilterList.ScrollBarThickness = 6
+espFilterList.ScrollBarImageColor3 = themeColor
+espFilterList.CanvasSize = UDim2.new(0, 0, 0, #itemNames * 27)
+espFilterList.Parent = ic
+onThemeChange(function(c) espFilterList.BorderColor3 = c espFilterList.ScrollBarImageColor3 = c end)
+
+for i, name in ipairs(itemNames) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -10, 0, 24)
+    btn.Position = UDim2.new(0, 5, 0, (i - 1) * 26)
+    btn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    btn.BorderSizePixel = 1
+    btn.BorderColor3 = themeColor
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 13
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Parent = espFilterList
+    onThemeChange(function(c) btn.BorderColor3 = c end)
+
+    -- Default: all items unchecked (don't show ESP by default)
+    local sel = false
+    btn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+
+    btn.MouseButton1Click:Connect(function()
+        sel = not sel
+        btn.BackgroundColor3 = sel and Color3.fromRGB(0, 50, 150) or Color3.fromRGB(20, 20, 20)
+        -- Refresh ESP so the filter takes effect immediately
+        if itemOptions.ESP then refreshItemESP() end
+    end)
+    itemESPFilter[name] = function() return sel end
+end
+
+-- Update refreshItemESP to handle espAllActive
+local originalRefreshItemESP = refreshItemESP
+refreshItemESP = function()
+    for i in pairs(itemESPInstances) do removeItemESP(i) end
+    if not itemOptions.ESP or not droppedItemsFolder then return end
+    for _, c in ipairs(droppedItemsFolder:GetChildren()) do
+        local filterFn = itemESPFilter and itemESPFilter[c.Name]
+        local isChecked = filterFn == nil or filterFn()
+        local allowed = espAllActive and not isChecked or (not espAllActive and isChecked)
+        if table.find(itemNames, c.Name) and allowed then createItemESP(c) end
+    end
+end
 
 -- ========== Player Tab ==========
 local playerTab = tabFrames["Player"]
@@ -656,7 +804,7 @@ apKeyBtn.MouseButton1Click:Connect(function()
     apKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 100)
 end)
 
-local apRadiusInput = makeRadiusInput(apCont, 68, 15)
+local apRadiusInput = makeRadiusInput(apCont, 68, 80)
 
 local apAllActive = false
 local apAllBtn = Instance.new("TextButton")
@@ -738,7 +886,7 @@ auKeyBtn.MouseButton1Click:Connect(function()
     auKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 100)
 end)
 
-local auRadiusInput = makeRadiusInput(auCont, 68, 10)
+local auRadiusInput = makeRadiusInput(auCont, 68, 50)
 
 local auAllActive = false
 local auAllBtn = Instance.new("TextButton")
@@ -775,13 +923,7 @@ for i, name in ipairs(autoUseItemNames) do
     auItemChecks[name] = function() return sel end
 end
 
---[[
-    AUTO USE LOGIC v5.5.5
-    
-    Separate logic for different item types:
-    - Inventory-only (Bandage/Medkit): Fire pickup remote only, no equip
-    - Consumable items (Ammo, Beans): Equip + use (from backpack or dropped)
-]]
+-- AUTO USE LOGIC v5.5.5
 local autoUseConn = nil
 local function startAutoUse()
     if autoUseConn then autoUseConn:Disconnect() end
@@ -798,7 +940,7 @@ local function startAutoUse()
             local shouldUse = auAllActive and not isChecked or (not auAllActive and isChecked)
             if not shouldUse then continue end
 
-            -- Inventory-only items: Just pickup (no equip)
+            -- Inventory-only items: Just pickup from world (no equip)
             if table.find(inventoryOnlyItems, name) then
                 if droppedItemsFolder and root then
                     for _, item in ipairs(droppedItemsFolder:GetChildren()) do
@@ -814,14 +956,12 @@ local function startAutoUse()
                         end
                     end
                 end
-
             else
                 -- Consumable items: Equip from backpack/character then use
                 local tool = backpack:FindFirstChild(name) or char:FindFirstChild(name)
                 if tool then
                     local hum = char:FindFirstChildOfClass("Humanoid")
                     if hum then hum:EquipTool(tool) task.wait(0.05) end
-                    
                     local ar = tool:FindFirstChild("Activate") or tool:FindFirstChild("Use")
                     if ar and ar:IsA("RemoteEvent") then
                         ar:FireServer()
@@ -830,8 +970,7 @@ local function startAutoUse()
                     end
                     task.wait(0.1)
                 end
-
-                -- Also check nearby dropped items within radius
+                -- Also check nearby dropped items
                 if droppedItemsFolder and root then
                     for _, item in ipairs(droppedItemsFolder:GetChildren()) do
                         if item.Name == name then
@@ -858,77 +997,7 @@ table.insert(connections, RunService.Heartbeat:Connect(function()
     elseif not autoUseActive and autoUseConn then autoUseConn:Disconnect() autoUseConn = nil end
 end))
 
--- ---------- BACKPACK SIZE ----------
-local bpGroupH = 45 + 32 + 30 + 30 + 30
-local bpGroup, bpCont = makeGroup(exploits, "Backpack Size", yOff, bpGroupH)
-yOff = yOff + bpGroupH + 10
 
-local bpStatusLbl = Instance.new("TextLabel")
-bpStatusLbl.Size = UDim2.new(1, -10, 0, 20) bpStatusLbl.Position = UDim2.new(0, 5, 0, 0)
-bpStatusLbl.BackgroundTransparency = 1 bpStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
-bpStatusLbl.Text = "Current size: unknown" bpStatusLbl.TextColor3 = Color3.fromRGB(180, 180, 180)
-bpStatusLbl.Font = Enum.Font.Gotham bpStatusLbl.TextSize = 12 bpStatusLbl.Parent = bpCont
-
-local bpSizeLbl = Instance.new("TextLabel")
-bpSizeLbl.Size = UDim2.new(0, 80, 0, 26) bpSizeLbl.Position = UDim2.new(0, 5, 0, 24)
-bpSizeLbl.BackgroundTransparency = 1 bpSizeLbl.Text = "New size:"
-bpSizeLbl.TextColor3 = Color3.fromRGB(200, 200, 220) bpSizeLbl.Font = Enum.Font.Gotham
-bpSizeLbl.TextSize = 13 bpSizeLbl.TextXAlignment = Enum.TextXAlignment.Left bpSizeLbl.Parent = bpCont
-
-local bpSizeInput = Instance.new("TextBox")
-bpSizeInput.Size = UDim2.new(0, 55, 0, 26) bpSizeInput.Position = UDim2.new(0, 88, 0, 24)
-bpSizeInput.BackgroundColor3 = Color3.fromRGB(20, 20, 20) bpSizeInput.BorderSizePixel = 1 bpSizeInput.BorderColor3 = themeColor
-bpSizeInput.Text = "50" bpSizeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
-bpSizeInput.Font = Enum.Font.Gotham bpSizeInput.TextSize = 13 bpSizeInput.Parent = bpCont
-onThemeChange(function(c) bpSizeInput.BorderColor3 = c end)
-
-local bpApplyBtn = Instance.new("TextButton")
-bpApplyBtn.Size = UDim2.new(0, 160, 0, 26) bpApplyBtn.Position = UDim2.new(0, 5, 0, 55)
-bpApplyBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20) bpApplyBtn.BorderSizePixel = 1 bpApplyBtn.BorderColor3 = themeColor
-bpApplyBtn.Text = "Apply Backpack Size" bpApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-bpApplyBtn.Font = Enum.Font.GothamMedium bpApplyBtn.TextSize = 13 bpApplyBtn.Parent = bpCont
-onThemeChange(function(c) bpApplyBtn.BorderColor3 = c end)
-
-local bpInfoLbl = Instance.new("TextLabel")
-bpInfoLbl.Size = UDim2.new(1, -10, 0, 30) bpInfoLbl.Position = UDim2.new(0, 5, 0, 86)
-bpInfoLbl.BackgroundTransparency = 1 bpInfoLbl.TextWrapped = true
-bpInfoLbl.Text = "Tries AdjustBackpack remote. Use correct args if it fails."
-bpInfoLbl.TextColor3 = Color3.fromRGB(130, 130, 130) bpInfoLbl.Font = Enum.Font.Gotham
-bpInfoLbl.TextSize = 11 bpInfoLbl.TextXAlignment = Enum.TextXAlignment.Left bpInfoLbl.Parent = bpCont
-
-local function detectBackpackSize()
-    local pStats = LocalPlayer:FindFirstChild("leaderstats") or LocalPlayer:FindFirstChild("PlayerData")
-    if pStats then
-        local bpVal = pStats:FindFirstChild("BackpackSize") or pStats:FindFirstChild("Slots") or pStats:FindFirstChild("MaxItems")
-        if bpVal then bpStatusLbl.Text = "Current size: " .. tostring(bpVal.Value) return end
-    end
-    bpStatusLbl.Text = "Current size: unknown"
-end
-detectBackpackSize()
-
-bpApplyBtn.MouseButton1Click:Connect(function()
-    local newSize = tonumber(bpSizeInput.Text)
-    if not newSize or newSize < 1 then bpStatusLbl.Text = "Invalid size value!" return end
-    local tried = false
-    if adjustBackpackRemote then
-        pcall(function() adjustBackpackRemote:FireServer(newSize) end)
-        pcall(function() adjustBackpackRemote:FireServer({size = newSize}) end)
-        pcall(function() adjustBackpackRemote:FireServer("set", newSize) end)
-        pcall(function() adjustBackpackRemote:FireServer(LocalPlayer, newSize) end)
-        tried = true
-    end
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotes then
-        for _, name in ipairs({"BackpackSize","SetSlots","UpgradeBackpack","SetBackpack","ResizeBackpack"}) do
-            local r = remotes:FindFirstChild(name, true)
-            if r and r:IsA("RemoteEvent") then
-                pcall(function() r:FireServer(newSize) end)
-                tried = true
-            end
-        end
-    end
-    bpStatusLbl.Text = tried and ("Fired remotes with size " .. newSize) or "No backpack remote found"
-end)
 
 -- ========== Misc Tab ==========
 local misc = tabFrames["Misc"]
@@ -1049,15 +1118,17 @@ local function mkInfo(text, color, size, y)
     l.TextXAlignment = Enum.TextXAlignment.Left l.Parent = info
 end
 mkInfo("FieScript", Color3.fromRGB(100,160,255), 22, yOff) yOff = yOff + 30
-mkInfo("Version: 5.5.3", Color3.fromRGB(255,255,255), 16, yOff) yOff = yOff + 30
+mkInfo("Version: 5.5.5", Color3.fromRGB(255,255,255), 16, yOff) yOff = yOff + 30
 mkInfo("Keybinds:", Color3.fromRGB(200,200,255), 14, yOff) yOff = yOff + 22
-mkInfo("  [Insert]  Toggle GUI",                Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
-mkInfo("  [Q]       Speed  (rebindable)",        Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
-mkInfo("  [X]       Auto Pickup  (rebindable)",  Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
-mkInfo("  [C]       Auto Use  (rebindable)",     Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 35
+mkInfo("  [Insert]  Toggle GUI",                    Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
+mkInfo("  [Z]       Mob ESP  (rebindable)",          Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
+mkInfo("  [V]       Item ESP  (rebindable)",         Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
+mkInfo("  [Q]       Speed  (rebindable)",            Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
+mkInfo("  [X]       Auto Pickup  (rebindable)",      Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 20
+mkInfo("  [C]       Auto Use  (rebindable)",         Color3.fromRGB(180,180,255), 13, yOff) yOff = yOff + 35
 mkInfo("Auto Use Logic:", Color3.fromRGB(200,200,255), 13, yOff) yOff = yOff + 20
-mkInfo("  Bandage/Medkit = pickup only (no equip)", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 20
-mkInfo("  Other items = equip + use", Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 35
+mkInfo("  Bandage/Medkit/weapons = pickup only",     Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 20
+mkInfo("  Consumables/ammo = equip + use",           Color3.fromRGB(160,220,255), 12, yOff) yOff = yOff + 35
 
 local unloadBtn = Instance.new("TextButton")
 unloadBtn.Size = UDim2.new(0, 200, 0, 40) unloadBtn.Position = UDim2.new(0, 5, 0, yOff)
@@ -1092,6 +1163,19 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(input, ga
     if gameProcessed then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
 
+    -- Rebind listeners (checked first, consume the keypress)
+    if listeningForMobESPKey then
+        mobESPKeyBind = input.KeyCode
+        mobESPKeyBtn.Text = "Mob ESP Key: [" .. tostring(input.KeyCode):gsub("Enum.KeyCode.", "") .. "]  (click to rebind)"
+        mobESPKeyBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        listeningForMobESPKey = false return
+    end
+    if listeningForItemESPKey then
+        itemESPKeyBind = input.KeyCode
+        itemESPKeyBtn.Text = "Item ESP Key: [" .. tostring(input.KeyCode):gsub("Enum.KeyCode.", "") .. "]  (click to rebind)"
+        itemESPKeyBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        listeningForItemESPKey = false return
+    end
     if listeningForSpeedKey then
         speedKeyBind = input.KeyCode
         speedKeyBtn.Text = "Speed Key: [" .. tostring(input.KeyCode):gsub("Enum.KeyCode.", "") .. "]  (click to rebind)"
@@ -1111,18 +1195,19 @@ table.insert(connections, UserInputService.InputBegan:Connect(function(input, ga
         listeningForUseKey = false return
     end
 
+    -- Actions
     if input.KeyCode == Enum.KeyCode.Insert then ScreenGui.Enabled = not ScreenGui.Enabled end
-    if input.KeyCode == speedKeyBind then toggleSpeed() end
+    if input.KeyCode == mobESPKeyBind   then toggleMobESPExt() end
+    if input.KeyCode == itemESPKeyBind  then toggleItemESPExt() end
+    if input.KeyCode == speedKeyBind    then toggleSpeed() end
     if input.KeyCode == autoPickupKeyBind then toggleAutoPickupExt() end
-    if input.KeyCode == autoUseKeyBind then toggleAutoUseExt() end
+    if input.KeyCode == autoUseKeyBind  then toggleAutoUseExt() end
 end))
 
 -- ========== Status Bar ==========
 table.insert(connections, RunService.RenderStepped:Connect(function()
-    local fps = math.floor(1 / RunService.RenderStepped:Wait())
     StatusText.Text = string.format(
-        "Ready | FPS:%d | MobESP:%s | ItemESP:%s | InfJump:%s | Pickup:%s | Speed:%s | Use:%s",
-        fps,
+        "Ready | MobESP:%s | ItemESP:%s | InfJump:%s | Pickup:%s | Speed:%s | Use:%s",
         mobOptions.ESP and "On" or "Off",
         itemOptions.ESP and "On" or "Off",
         originalValues.infJumpActive and "On" or "Off",
@@ -1132,4 +1217,4 @@ table.insert(connections, RunService.RenderStepped:Connect(function()
     )
 end))
 
-print("FieScript v5.5.5 loaded. [Insert] GUI | [Q] Speed | [X] Pickup | [C] AutoUse")
+print("FieScript v5.5.6 loaded. [Insert] GUI | [Z] MobESP | [V] ItemESP | [Q] Speed | [X] Pickup | [C] AutoUse")
